@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      # ADR-010: PostgreSQL everywhere. Integration tests and the migration
+      # drift check run against a real Postgres service.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: devsentinel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devsentinel_test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devsentinel_test
+      DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:5432/devsentinel_test
+      SHADOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devsentinel_shadow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          # postinstall runs `prisma generate`, which needs no reachable database
+          PRISMA_HIDE_UPDATE_MESSAGE: "1"
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit + integration tests (on Postgres)
+        run: npm test -- --reporter=verbose
+      - name: Apply migrations to a fresh database
+        run: npx prisma migrate deploy
+      - name: Create shadow database for the drift check
+        run: psql "postgresql://postgres:postgres@127.0.0.1:5432/postgres" -c "CREATE DATABASE devsentinel_shadow"
+      # CI check: fail if prisma/schema.prisma and the versioned migrations drift
+      # apart (an edited schema without a matching migration exits 2).
+      - name: Migration drift check (schema ↔ migrations)
+        run: npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$SHADOW_DATABASE_URL" --exit-code
+      - name: Generate throwaway build key
+        run: echo "ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+      - name: Build
+        run: npm run build
+      - name: Dependency audit (non-blocking report)
+        run: npm audit --omit=dev || true
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the deployment image (one image, role by APP_ROLE)
+        run: docker build --progress=plain -t devsentinel-ai:ci .
+      - name: Verify the pinned TestSprite CLI is in the image
+        run: |
+          docker run --rm --entrypoint node devsentinel-ai:ci \
+            -e "process.exit(require('/app/node_modules/@testsprite/testsprite-cli/package.json').version==='0.14.0'?0:1)"
+
+  # Browser E2E on real Postgres (needs Chromium, which is why it runs in CI
+  # rather than on constrained dev machines). The throwaway database is the
+  # service container — no repository secret required.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: devsentinel_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devsentinel_e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          PRISMA_HIDE_UPDATE_MESSAGE: "1"
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser E2E (PR → run → staleness, incidents, webhook signature)
+        run: npm run test:e2e
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,415 @@
+// DevSentinel AI — database schema (PostgreSQL via Prisma).
+// One engine on every host (ADR-010, docs/decisions.md): DATABASE_URL is the
+// pooled connection the app uses; DIRECT_URL is the direct connection Prisma
+// migrations use (on Vercel/PG bouncers pooled URLs cannot run DDL).
+// Self-hosted without a pooler: set both to the same URL.
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions           Session[]
+  passwordResetToken PasswordResetToken[]
+  projects           Project[]
+  notifications      Notification[]
+  notificationPrefs  NotificationPreference[]
+  auditEvents        AuditEvent[]
+  investigations     Investigation[]
+  githubInstallations GithubInstallation[]
+}
+
+/// A GitHub App installation this user has proven access to via GitHub sign-in.
+/// Repository pickers and links only ever use the signed-in user's own rows.
+model GithubInstallation {
+  id             String   @id @default(cuid())
+  userId         String
+  installationId String
+  accountLogin   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, installationId])
+  @@index([userId])
+}
+
+model Session {
+  id         String   @id // sha256 hash of the session token
+  userId     String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  userAgent  String?
+  ip         String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Project {
+  id                  String   @id @default(cuid())
+  name                String
+  description         String?
+  ownerId             String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  testspriteProjectId String?
+  // Deployed URL TestSprite should exercise during a run (project's own app).
+  testTargetUrl       String?
+  // Authored plan steps (JSON array of {type: action|assertion, description}).
+  testPlanSteps       String?
+  // TestSprite test id created for this project's smoke plan (reused for reruns).
+  testspriteTestId    String?
+  // Trigger rules: which PR events start a TestSprite run.
+  runOnPrOpened       Boolean  @default(true)
+  runOnPrSynchronize  Boolean  @default(true)
+  runOnPrReopened     Boolean  @default(true)
+  // Incident rule: create incident when a run fails on the monitored branch.
+  incidentOnRunFail   Boolean  @default(true)
+
+  owner             User                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  repository        RepositoryConnection?
+  integrations      ProjectIntegration[]
+  pullRequests      PullRequest[]
+  testRuns          TestRun[]
+  monitoringTargets MonitoringTarget[]
+  incidents         Incident[]
+  notifications     Notification[]
+  webhookDeliveries WebhookDelivery[]
+  auditEvents       AuditEvent[]
+
+  @@index([ownerId])
+}
+
+model RepositoryConnection {
+  id               String   @id @default(cuid())
+  projectId        String   @unique
+  owner            String
+  repo             String
+  defaultBranch    String   @default("main")
+  monitoredBranch  String?
+  installationId   String? // set once a GitHub App installation is linked
+  githubTokenLast4 String? // optional PAT used only for status publishing
+  disabled         Boolean  @default(false)
+  disabledReason   String?
+  connectedAt      DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([owner, repo])
+}
+
+// Encrypted-at-rest integration credentials (AES-256-GCM; key from ENCRYPTION_KEY).
+model ProjectIntegration {
+  id        String   @id @default(cuid())
+  projectId String
+  kind      String // "testsprite" | "github_token"
+  cipher    String // base64 ciphertext (iv:tag:data)
+  keyVersion Int     @default(1)
+  last4     String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, kind])
+}
+
+model PullRequest {
+  id             String   @id @default(cuid())
+  projectId      String
+  number         Int
+  repoOwner      String
+  repoName       String
+  title          String
+  author         String?
+  sourceBranch   String
+  targetBranch   String
+  currentHeadSha String
+  state          String   @default("open") // open | closed
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runs    TestRun[]
+
+  @@unique([projectId, repoOwner, repoName, number])
+  @@index([projectId, updatedAt])
+}
+
+// Immutable commit binding: repoOwner/repoName/commitSha are set at creation and
+// never updated (enforced in application code + tests, see docs/decisions.md).
+model TestRun {
+  id             String    @id @default(cuid())
+  projectId      String
+  prId           String?
+  repoOwner      String
+  repoName       String
+  commitSha      String
+  trigger        String // pull_request | manual | retry | push
+  source         String    @default("testsprite") // testsprite | local | demo
+  status         String    @default("queued") // queued | running | passed | failed | cancelled | error | unknown
+  statusReason   String? // why (e.g. "timeout", "provider_error: ...")
+  summary        String? // JSON: { total, passed, failed, skipped, durationSec }
+  summaryText    String? // provider-provided one-line summary, when returned
+  failures       String? // JSON array of per-test failures (capped)
+  externalTestId String?
+  externalRunId  String?
+  attempt        Int       @default(1)
+  parentRunId    String?
+  queuedAt       DateTime  @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  output         String? // capped stored output (redacted, truncated)
+  outputTruncated Boolean  @default(false)
+  errorMessage   String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pr      PullRequest? @relation(fields: [prId], references: [id], onDelete: SetNull)
+  parent  TestRun? @relation("RunRetries", fields: [parentRunId], references: [id], onDelete: SetNull)
+  retries TestRun[] @relation("RunRetries")
+  publications CheckPublication[]
+
+  @@index([projectId, queuedAt])
+  @@index([prId, queuedAt])
+  @@index([commitSha])
+}
+
+model CheckPublication {
+  id        String   @id @default(cuid())
+  runId     String
+  kind      String // "status" | "comment"
+  outcome   String // published | failed | not_configured | skipped_stale
+  detail    String?
+  externalId String? // GitHub status id / comment id
+  createdAt DateTime @default(now())
+
+  run TestRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+}
+
+model WebhookDelivery {
+  id          String    @id @default(cuid())
+  deliveryId  String    @unique
+  projectId   String?
+  event       String
+  status      String    @default("received") // received | processed | ignored | error
+  error       String?
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, receivedAt])
+}
+
+model Job {
+  id             String    @id @default(cuid())
+  type           String
+  payload        String // JSON
+  status         String    @default("queued") // queued | running | done | failed | dead
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  idempotencyKey String?   @unique
+  runAfter       DateTime  @default(now())
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  startedAt      DateTime?
+  finishedAt     DateTime?
+
+  @@index([status, runAfter])
+}
+
+model MonitoringTarget {
+  id                   String   @id @default(cuid())
+  projectId            String
+  name                 String
+  url                  String
+  method               String   @default("GET") // GET | HEAD
+  intervalMinutes      Int      @default(5)
+  timeoutSeconds       Int      @default(10)
+  expectedStatus       Int      @default(200)
+  expectedBody         String?
+  failureThreshold     Int      @default(3)
+  consecutiveFailures  Int      @default(0)
+  currentState         String   @default("unknown") // unknown | healthy | degraded | down
+  lastCheckedAt        DateTime?
+  lastSuccessAt        DateTime?
+  lastFailureAt        DateTime?
+  enabled              Boolean  @default(true)
+  createdAt            DateTime @default(now())
+
+  project Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  checks  MonitoringCheck[]
+
+  @@index([projectId])
+}
+
+model MonitoringCheck {
+  id             String   @id @default(cuid())
+  targetId       String
+  checkedAt      DateTime @default(now())
+  statusCode     Int?
+  responseTimeMs Int?
+  outcome        String // success | failure | timeout | error
+  errorClass     String?
+  redirectedTo   String?
+
+  target MonitoringTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([targetId, checkedAt])
+}
+
+model Incident {
+  id              String    @id @default(cuid())
+  projectId       String
+  title           String
+  severity        String    @default("medium") // critical | high | medium | low
+  status          String    @default("open") // open | investigating | identified | resolved | closed
+  sourceType      String // monitoring | test_run | integration
+  fingerprint     String
+  evidence        String? // JSON: references to runs/checks
+  resolutionNotes String?
+  openedAt        DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  resolvedAt      DateTime?
+
+  project Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events  IncidentEvent[]
+  investigations Investigation[]
+
+  @@unique([projectId, fingerprint])
+  @@index([projectId, status])
+}
+
+model IncidentEvent {
+  id         String   @id @default(cuid())
+  incidentId String
+  actor      String // user id or "system"
+  type       String // opened | status_change | note | occurrence | resolved
+  note       String?
+  createdAt  DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId, createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  projectId String?
+  type      String
+  title     String
+  body      String
+  entityRef String?
+  dedupKey  String    @unique
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  // Email channel result (spec 14: provider id recorded; "delivered" only if confirmed).
+  emailStatus     String? // delivered | failed | not_configured
+  emailProviderId String?
+  emailError      String?
+  emailedAt       DateTime?
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+model NotificationPreference {
+  id        String  @id @default(cuid())
+  userId    String
+  projectId String? // null = global default
+  eventType String
+  inApp     Boolean @default(true)
+  email     Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId, eventType])
+}
+
+model Investigation {
+  id              String   @id @default(cuid())
+  incidentId      String
+  userId          String
+  provider        String
+  model           String?
+  status          String   @default("completed") // completed | rejected
+  sections        String? // JSON: confirmedFacts, possibleCause, unknown, recommendedAction
+  evidenceSnapshot String? // JSON snapshot of what was sent
+  createdAt       DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId, createdAt])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  projectId String?
+  action    String
+  detail    String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user    User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+}
+
+model WorkerHeartbeat {
+  id        String   @id @default("singleton")
+  updatedAt DateTime @updatedAt
+  detail    String?
+}
+
+// Shared (cross-instance) fixed-window rate limiting (ADR-011): replaces the
+// former in-memory limiter so web replicas enforce one limit together.
+model RateLimitWindow {
+  id         String   @id @default(cuid())
+  key        String
+  windowStart DateTime
+  count      Int      @default(0)
+  expiresAt  DateTime
+
+  @@unique([key, windowStart])
+  @@index([expiresAt])
+}

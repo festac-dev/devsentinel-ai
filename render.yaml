@@ -1,0 +1,83 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# All configuration lives in managed environment variables, never in the repo:
+#   - generateValue: Render generates and stores the secret (base64 256-bit).
+#   - sync: false    Render prompts for the value in the Dashboard at deploy time.
+# No secret values are committed to this repository. See .env.example for what
+# each variable does and where it is obtained.
+#
+# ADR-010: PostgreSQL everywhere. One web service runs the whole product in
+# this single-container shape (APP_ROLE=all — web + in-process worker) against
+# a managed PostgreSQL database; migrations run as the pre-deploy (release)
+# command, never on web boot. To scale out, deploy the same image with
+# APP_ROLE=web plus a separate APP_ROLE=worker service instead.
+
+services:
+  - type: web
+    name: devsentinel-ai
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    preDeployCommand: npx prisma migrate deploy # migration release step
+    startCommand: npm run start
+    healthCheckPath: /api/health/ready
+    maxShutdownDelaySeconds: 60 # graceful drain for in-flight jobs and checks
+    envVars:
+      # ---- Role ----
+      - key: APP_ROLE
+        value: all # web + in-process worker in one service
+      - key: WORKER_IN_PROCESS
+        value: 0 # deprecated alias; APP_ROLE=all governs (explicit 0 for clarity)
+      # ---- Core ----
+      - key: APP_BASE_URL
+        sync: false # the deployment's public URL, used for links and webhook docs
+      # NODE_ENV is set to production by the Node runtime.
+      # ---- Database (PostgreSQL; create it under "Databases" or use an external provider) ----
+      - key: DATABASE_URL
+        sync: false # pooled connection string from the database resource/provider
+      - key: DIRECT_URL
+        sync: false # direct (non-pooled) string; equals DATABASE_URL without a pooler
+      # ---- Secrets (generated and stored by Render) ----
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: ENCRYPTION_KEY_VERSION
+        value: 1
+      # ---- GitHub (webhook processing stays disabled until the secret is set) ----
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_SLUG
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: GITHUB_APP_CLIENT_ID
+        sync: false
+      - key: GITHUB_APP_CLIENT_SECRET
+        sync: false
+      # ---- TestSprite (per-project keys are stored encrypted in the app) ----
+      - key: TESTSPRITE_API_KEY
+        sync: false
+      - key: TESTSPRITE_WAIT_TIMEOUT_SECONDS
+        value: 600
+      # ---- Email (optional; when unset, notifications are in-app only) ----
+      - key: EMAIL_PROVIDER
+        value: brevo
+      - key: EMAIL_PROVIDER_API_KEY
+        sync: false
+      - key: EMAIL_PROVIDER_FROM
+        sync: false
+      # ---- AI (optional; unconfigured = investigations unavailable, honestly labeled) ----
+      - key: AI_PROVIDER_API_KEY
+        sync: false
+      - key: AI_PROVIDER_MODEL
+        sync: false
+      - key: AI_PROVIDER_BASE_URL
+        sync: false
+      # ---- Worker tuning (the loop boots in-process under APP_ROLE=all) ----
+      - key: WORKER_POLL_INTERVAL_MS
+        value: 3000
+      - key: WORKER_CONCURRENCY
+        value: 2
+      - key: RETENTION_DAYS
+        value: 90

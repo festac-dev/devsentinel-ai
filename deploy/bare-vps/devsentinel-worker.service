@@ -1,0 +1,22 @@
+[Unit]
+Description=DevSentinel AI worker (APP_ROLE=worker)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=devsentinel
+WorkingDirectory=/opt/devsentinel/app
+EnvironmentFile=/opt/devsentinel/app/.env
+Environment=APP_ROLE=worker
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm run worker
+Restart=on-failure
+RestartSec=5
+# Graceful shutdown: SIGTERM stops claiming new jobs and lets in-flight jobs
+# finish before the database pool closes (src/worker/loop.ts).
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

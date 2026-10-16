@@ -1,0 +1,75 @@
+# DevSentinel AI on any VPS with Docker Compose (deploy recipe c in DEPLOYMENT.md).
+#   cp .env.example .env   # fill in the values
+#   docker compose up -d --build
+# The `migrate` service applies migrations once per release — never on web boot.
+
+services:
+  postgres:
+    image: postgres:17.4-alpine
+    environment:
+      POSTGRES_USER: devsentinel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: devsentinel
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devsentinel -d devsentinel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # One-shot migration step: runs on releases (docker compose run --rm migrate
+  # or automatically before web/worker start below), never inside the web app.
+  migrate:
+    build:
+      context: .
+      target: runner
+    entrypoint: ["./node_modules/.bin/prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://devsentinel:${POSTGRES_PASSWORD}@postgres:5432/devsentinel
+      DIRECT_URL: postgresql://devsentinel:${POSTGRES_PASSWORD}@postgres:5432/devsentinel
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      target: runner
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    env_file: .env
+    environment:
+      APP_ROLE: web
+      # Local compose has no pooler: pooled and direct URLs are the same.
+      DATABASE_URL: postgresql://devsentinel:${POSTGRES_PASSWORD}@postgres:5432/devsentinel
+      DIRECT_URL: postgresql://devsentinel:${POSTGRES_PASSWORD}@postgres:5432/devsentinel
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      target: runner
+    env_file: .env
+    environment:
+      APP_ROLE: worker
+      DATABASE_URL: postgresql://devsentinel:${POSTGRES_PASSWORD}@postgres:5432/devsentinel
+      DIRECT_URL: postgresql://devsentinel:${POSTGRES_PASSWORD}@postgres:5432/devsentinel
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      disable: true # no inbound port by design
+
+volumes:
+  pgdata:

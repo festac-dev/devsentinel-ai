@@ -1,0 +1,23 @@
+[Unit]
+Description=DevSentinel AI web (APP_ROLE=web)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=devsentinel
+WorkingDirectory=/opt/devsentinel/app
+EnvironmentFile=/opt/devsentinel/app/.env
+Environment=APP_ROLE=web
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=5
+# Graceful shutdown: SIGTERM lets Next.js stop accepting connections and the
+# app close its database pool (src/instrumentation.ts).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

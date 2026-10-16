@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.github
+tests
+playwright-report
+test-results
+*.db
+*.db-journal
+.env
+.env.*
+!.env.example
+docker-compose.yml
+deploy
+docs
+*.md
