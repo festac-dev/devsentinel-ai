@@ -12,6 +12,7 @@ verified against the code before being made, and is covered by the test suite
 
 ## HIGH
 
+
 ### 1. A GitHub webhook that failed once was permanently swallowed as a "duplicate"
 
 **Symptom.** A PR event whose processing failed (transient DB error, pool
