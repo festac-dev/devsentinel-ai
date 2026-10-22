@@ -35,6 +35,17 @@ const STATUS_STYLES: Record<string, string> = {
   not_configured: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
   skipped_stale: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
   unconfigured: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+  // Delivery tracker: "completed" is reported completion, deliberately NOT green.
+  completed: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-300",
+  in_progress: "bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-300",
+  blocked: "bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300",
+  pending: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+  verified: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300",
+  pending_review: "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300",
+  unverified: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+  rejected: "bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300",
+  ready: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300",
+  not_ready: "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300",
 };
 
 export function Badge({ status, tooltip, children }: { status: string; tooltip?: string; children?: ReactNode }) {

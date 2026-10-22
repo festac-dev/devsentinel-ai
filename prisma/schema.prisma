@@ -31,6 +31,11 @@ model User {
   auditEvents        AuditEvent[]
   investigations     Investigation[]
   githubInstallations GithubInstallation[]
+  deliveryTracker               DeliveryTracker?
+  deliveryTaskVerifications     DeliveryTask[]           @relation("DeliveryTaskVerifiedBy")
+  deliveryEvidenceSubmissions   TaskEvidence[]           @relation("DeliveryEvidenceSubmittedBy")
+  deliveryEvidenceVerifications TaskEvidence[]           @relation("DeliveryEvidenceVerifiedBy")
+  deliveryAuditEvents           DeliveryAuditEvent[]
 }
 
 /// A GitHub App installation this user has proven access to via GitHub sign-in.
@@ -412,4 +417,109 @@ model RateLimitWindow {
 
   @@unique([key, windowStart])
   @@index([expiresAt])
+}
+
+model DeliveryTracker {
+  id            String   @id @default(cuid())
+  ownerId       String   @unique
+  seedVersion   Int      @default(1)
+  title         String
+  description   String?
+  liveUrl       String?
+  repositoryUrl String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  owner  User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  phases DeliveryPhase[]
+}
+
+model DeliveryPhase {
+  id          String   @id @default(cuid())
+  trackerId   String
+  stableKey   String
+  title       String
+  description String?
+  phaseOrder  Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tracker DeliveryTracker @relation(fields: [trackerId], references: [id], onDelete: Cascade)
+  tasks   DeliveryTask[]
+
+  @@unique([trackerId, stableKey])
+  @@unique([trackerId, phaseOrder])
+  @@index([trackerId, phaseOrder])
+}
+
+model DeliveryTask {
+  id                 String    @id @default(cuid())
+  phaseId            String
+  stableKey          String
+  title              String
+  description        String
+  status             String    @default("pending") // pending | in_progress | completed | blocked
+  verificationStatus String    @default("unverified") // unverified | pending_review | verified | rejected
+  completionNotes    String?
+  taskOrder          Int
+  completedAt        DateTime?
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  phase       DeliveryPhase        @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  verifier    User?                @relation("DeliveryTaskVerifiedBy", fields: [verifiedBy], references: [id], onDelete: SetNull)
+  evidence    TaskEvidence[]
+  auditEvents DeliveryAuditEvent[]
+
+  @@unique([phaseId, stableKey])
+  @@unique([phaseId, taskOrder])
+  @@index([phaseId, status])
+  @@index([phaseId, verificationStatus])
+}
+
+model TaskEvidence {
+  id                 String    @id @default(cuid())
+  taskId             String
+  evidenceType       String
+  title              String
+  referenceUrl       String?
+  artifactReference  String?
+  sourceCommitSha    String?
+  sourceRecordType   String? // test_run | pull_request | incident | monitoring_check
+  sourceRecordId     String?
+  notes              String?
+  verificationStatus String    @default("pending_review") // pending_review | verified | rejected
+  verificationBasis  String? // internal_record | reference_review | manual_review
+  submittedBy        String?
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  task      DeliveryTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  submitter User?        @relation("DeliveryEvidenceSubmittedBy", fields: [submittedBy], references: [id], onDelete: SetNull)
+  verifier  User?        @relation("DeliveryEvidenceVerifiedBy", fields: [verifiedBy], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+  @@index([verificationStatus])
+}
+
+model DeliveryAuditEvent {
+  id             String   @id @default(cuid())
+  taskId         String
+  actorId        String?
+  previousStatus String?
+  newStatus      String?
+  action         String
+  reason         String?
+  metadata       String?
+  createdAt      DateTime @default(now())
+
+  task  DeliveryTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+  @@index([actorId, createdAt])
 }

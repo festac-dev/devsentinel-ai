@@ -12,6 +12,7 @@ encoded endpoints with CSRF protection) — both are documented here.
 | GET | `/api/health` | public | Liveness. Always 200 when the process answers. |
 | GET | `/api/health/ready` | public | Readiness: database, migrations, worker heartbeat. 503 when degraded. Reports only real state. |
 | POST | `/api/webhooks/github` | HMAC signature | GitHub webhook receiver. Verifies signature before parsing; dedups by delivery ID; 1 MB cap; processes `pull_request` events. |
+| GET | `/api/delivery/report` | Session | Regenerates the delivery/verification report from current records and returns it as a Markdown attachment (`Cache-Control: no-store`). 401 unauthenticated; 429 rate limited; 500 if generation fails. |
 
 ### Webhook responses
 
@@ -36,6 +37,12 @@ Actions live in `src/app/actions/*.ts` and are invoked by the app's forms:
 - **incidents**: `transitionIncidentAction`, `addIncidentNoteAction`,
   `investigateIncidentAction`, `markNotificationReadAction`,
   `markAllNotificationsReadAction`
+- **delivery tracker**: `updateDeliveryTaskStatusAction`,
+  `updateDeliveryTaskNotesAction`, `addDeliveryEvidenceAction`,
+  `reviewDeliveryEvidenceAction`. These enforce owner scoping, the task state
+  machine, the evidence policy, and verification invalidation. Attaching
+  evidence only produces `pending_review`; verification requires an explicit
+  `verify` decision recorded with an actor and basis.
 
 Authorization: every action re-checks session and resource ownership server-side and
 returns 404-equivalent for foreign resources. A public REST surface mirroring these

@@ -8,6 +8,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 const ITEMS = [
   { href: "/app", label: "Overview" },
+  { href: "/app/delivery", label: "Delivery Tracker" },
   { href: "/app/projects", label: "Projects" },
   { href: "/app/pull-requests", label: "Pull Requests" },
   { href: "/app/runs", label: "Test Runs" },

@@ -24,6 +24,20 @@ A result for commit A is **never** shown as validating commit B. When a PR's hea
 earlier runs are marked **Stale** with a tooltip naming both SHAs, and statuses are only
 published after re-reading the current head SHA.
 
+## Delivery and verification tracker
+
+The app records its own four-phase implementation plan in an authenticated
+tracker at `/app/delivery`. Reported completion and evidence verification are
+separate states: the 16 initial tasks are stored as reported complete but
+unverified until an owner attaches supported evidence and explicitly accepts it.
+Evidence can link real test runs, monitoring checks, incidents, pull requests,
+GitHub/CI references, or dated review notes; simulated demo runs and hardcoded
+claims are rejected. Readiness requires all tasks to exist with verified evidence,
+not just a 100% completion percentage. The report at `/app/delivery/report` is
+generated from stored state (Markdown download; print to PDF in the browser) and
+states what was and was not verified. See
+[`docs/delivery-tracker.md`](./docs/delivery-tracker.md).
+
 ## Architecture
 
 One codebase, two runtime roles, selected by `APP_ROLE`:
@@ -339,6 +353,7 @@ TestSprite check generated in the TestSprite 3.0 portal.
 - [`docs/github-app-setup.md`](./docs/github-app-setup.md): GitHub App registration, permissions, and webhook configuration
 - [`docs/demo-guide.md`](./docs/demo-guide.md): timed hackathon demonstration script with fallbacks
 - [`docs/api.md`](./docs/api.md): HTTP API surface and server actions
+- [`docs/delivery-tracker.md`](./docs/delivery-tracker.md): delivery tracker states, evidence policy, readiness, and report boundaries
 - [`docs/troubleshooting.md`](./docs/troubleshooting.md): common setup problems
 - [`SECURITY.md`](./SECURITY.md): security posture, known limitations, vulnerability reporting
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md): development workflow

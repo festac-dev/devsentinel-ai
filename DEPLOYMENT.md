@@ -69,6 +69,12 @@ Pick your path:
      `curl -s -o /dev/null -w '%{http_code}' -X POST https://<your-url>/api/webhooks/github -H 'content-type: application/json' -d '{}'`
    - Open the **Integrations** page: "Background worker: running" with a fresh
      heartbeat timestamp (the same heartbeat the readiness endpoint checks).
+   - Open **Delivery Tracker**: the four phases and 16 tasks load, reported
+     completion and evidence verification are shown separately, and
+     `/api/delivery/report` downloads Markdown while signed in (401 when not).
+     `20261022023749_delivery_tracker` is additive; no tracker rows are created
+     until the first authenticated visit. See
+     [`docs/delivery-tracker.md`](./docs/delivery-tracker.md).
 
 ## Graceful shutdown
 
@@ -92,6 +98,15 @@ A platform subdomain (`*.vercel.app`, `*.up.railway.app`, `*.onrender.com`,
 webhook, TestSprite accepts it as a test target, and HTTPS is automatic. The
 **worker needs no domain and no inbound port at all**; only the web role is
 reachable.
+
+## Delivery tracker rollout note
+
+The delivery tracker migration creates new tables and adds optional relations to
+`User`; existing projects, runs, incidents, and accounts are untouched. Apply it
+with the normal `prisma migrate deploy` step. Initialization is lazy and
+idempotent per owner, so no seed command is required. Roll back code in the
+usual way; the additive tables can remain in place. Do not drop them while the
+current release is serving traffic.
 
 ## Rollback
 
