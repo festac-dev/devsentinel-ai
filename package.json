@@ -20,10 +20,10 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.12.0",
+    "@prisma/client": "6.12.0",
     "@testsprite/testsprite-cli": "0.14.0",
     "next": "^16.4.0",
-    "prisma": "^6.12.0",
+    "prisma": "6.12.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tsx": "^4.23.15",
